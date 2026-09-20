@@ -1,0 +1,42 @@
+# Python and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+# Data, trained models and generated reports (at any depth)
+data/
+datasets/
+real/
+real_mask_dataset/
+datatest/
+checkpoints/
+weights/
+hf_best/
+runs/
+outputs/
+results/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.bin
+.sample_cache_*.json
+.hf_cache/
+.cache/
+*.log
+*.jsonl
+# Local configuration and editor files
+.env
+.env.*
+!.env.example
+*.local.yaml
+*.local.json
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

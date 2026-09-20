@@ -1,0 +1,7 @@
+{
+  "image": "rgb/example.png",
+  "mask": "mask/example.png",
+  "extrinsic_group_id": "example_mount_001",
+  "T_EC_unit": "mm",
+  "T_EC": [[1, 0, 0, 10], [0, 1, 0, 20], [0, 0, 1, 30], [0, 0, 0, 1]]
+}

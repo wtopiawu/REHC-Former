@@ -1,0 +1,1 @@
+"""Independent SegFormer gripper segmentation."""

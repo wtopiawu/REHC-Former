@@ -1,0 +1,5 @@
+-r requirements.txt
+transformers==4.46.3
+albumentations==1.4.3
+opencv-python-headless==4.10.0.84
+PyYAML>=6
