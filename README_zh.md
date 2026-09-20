@@ -1,39 +1,120 @@
 # REHC-Former
 
-配套论文：**REHC-Former: Transformer-Based Robotic Eye-in-Hand Calibration from a Single Image**。
+**基于 Transformer 的单图像机器人眼在手上标定**
 
-本目录是整理后的公开源码，原始实验文件保留在相邻的原始目录中。上传 GitHub 时只选择本目录。
+[English](README.md) · [数据格式](docs/DATA_FORMAT.md) · [分割模型](segmentation/README.md)
 
-## 保留的内容
+REHC-Former 从一张包含机器人末端执行器的 RGB 图像中，估计相机到末端执行器的刚体变换。模型通过双流 Transformer 融合 RGB 外观信息与前景掩码的几何信息，直接预测平移和旋转。
 
-- 完整 RGB–Mask 双流 Transformer：流内自注意力、顺序双向交叉注意力、四项池化和独立位姿回归头。
-- 9D 旋转表示及 SVD 投影、训练集平移标准化、Smooth L1 损失。
-- RGB-only、Mask-only、Early Fusion、Late Fusion 四类消融模型。
-- 独立 SegFormer 分割训练及推理、单张 RGB 自动分割后预测手眼变换。
-- 通用仿真测试指标、可配置仿真采集示例和分割数据处理工具。
+本项目为论文 **REHC-Former: Transformer-Based Robotic Eye-in-Hand Calibration from a Single Image** 的配套代码。作者：Xu Wu、Zhongtao Fu、Longhua Li、Bo Yang、Xuan Zhou、Zhenghua Huang 和 Xubing Chen。
 
-## 从发布目录移除的内容
+## 方法概述
 
-真实棋盘格评估、多图位姿融合、变换方向组合搜索、实验专用报表、默认读取真实实验目录的入口，以及缓存和来源未说明的示例照片。训练中的验证过程和通用有标签仿真测试仍保留。
+- **单图像推理**：推理时无需标定板或多组机器人位姿，即可估计手眼变换。
+- **RGB–Mask 双流融合**：分别提取外观与前景特征，通过流内自注意力和顺序双向交叉注意力进行信息交互。
+- **位姿回归**：独立回归头预测平移和 9D 旋转表示，旋转经 SVD 投影得到有效的旋转矩阵。
+- **仿真到真实部署**：位姿网络使用仿真 RGB–Mask 数据训练；真实图像的前景掩码由独立训练的 SegFormer-B1 预测。
 
-## 使用
+输出变换 `T_EC` 将相机坐标转换到末端执行器坐标：
 
-在本目录运行以下命令，Python 版本不低于 3.10：
+```text
+X_E = R_EC @ X_C + t_EC
+```
+
+## 环境安装
+
+使用 Python 3.10 或更新版本。根据 CPU 或 CUDA 环境安装配套的 PyTorch 与 torchvision，然后在仓库根目录执行：
 
 ```bash
 python -m pip install -r requirements.txt
-python train.py --variant rehc_former --data_dir data/train --output_dir runs/rehc_former --rotation_repr 9d
+# 分割模型训练及自动掩码预测：
+python -m pip install -r requirements-segmentation.txt
+```
+
+CPU 测试环境为 Python 3.12、PyTorch 2.6.0 和 torchvision 0.21.0。导出 ONNX 时还需安装 `onnx`。
+
+## 数据准备
+
+训练数据由对齐的 RGB 图像、二值前景掩码和相机到末端执行器的位姿标签组成。目录结构、标签约定和平移单位见[数据格式说明](docs/DATA_FORMAT.md)。
+
+```bash
+python check_dataset.py --data_dir data/train --label_mode tec
+```
+
+仿真数据采集见 [CoppeliaSim 采集指南](data_collection/README.md)；掩码标注、分割训练与推理见[分割模型指南](segmentation/README.md)。
+
+数据集与预训练权重暂未提供下载。运行推理前，请准备数据并完成相应模型的训练。
+
+## 模型训练
+
+```bash
+python train.py --data_dir data/train --output_dir runs/rehc_former --variant rehc_former --rotation_repr 9d --backbone_name lite_cnn --embed_dim 128 --depth 2 --num_heads 4 --patch_stride 2 --epochs 80 --batch_size 8
+```
+
+使用 CUDA 时可添加 `--amp` 开启混合精度。训练集与验证集按外参组划分，同一外参下的图像不会同时进入两者；平移标准化仅使用训练集统计量。权重、配置、数据划分和训练指标保存到 `--output_dir`，每次实验建议使用独立输出目录。
+
+进行消融实验时，固定数据划分、随机种子和训练超参数，通过 `--variant` 选择模型：
+
+| 参数值 | 模型 |
+|---|---|
+| `rehc_former` | 带交叉注意力的完整 RGB–Mask 模型 |
+| `rgb_only` | 仅 RGB 输入的 Transformer |
+| `mask_only` | 仅 Mask 输入的 Transformer |
+| `early_fusion` | RGB 与 Mask 在输入端拼接 |
+| `late_fusion` | 不使用交叉注意力的双流模型 |
+
+## 单图像推理
+
+### 使用已有掩码
+
+掩码须与 RGB 图像对齐，前景值为 255，背景值为 0：
+
+```bash
 python predict.py --image data/demo/rgb/frame.png --mask data/demo/mask/frame.png --checkpoint runs/rehc_former/best_infer_only.pt --output outputs/prediction.json
 ```
 
-若要仅提供 RGB 图片，让 SegFormer 自动生成掩码，安装 `requirements-segmentation.txt`，训练分割模型后使用英文 [README](README.md) 中的 `--seg-model` 命令。
+### 自动预测掩码
 
-`T_EC` 将相机坐标转换到末端坐标，输出 JSON 明确给出平移单位。数据格式见 [DATA_FORMAT.md](docs/DATA_FORMAT.md)。所有相对路径以运行命令时的当前目录为基准。训练与消融共用外参组划分，不把同一外参下的多张图片分到训练和验证两侧。
+提供训练好的 SegFormer 和位姿模型权重，即可从一张 RGB 图像完成推理：
 
-## 与原始实验的关系
+```bash
+python predict.py --image data/demo/rgb/frame.png --seg-model outputs/segformer_b1_gripper/hf_best --seg-config outputs/segformer_b1_gripper/config.yaml --checkpoint runs/rehc_former/best_infer_only.pt --output outputs/prediction.json --save-mask outputs/frame_mask.png
+```
 
-整理中统一了主模型与消融的分组划分，修正了 Late Fusion 掩码分支额外下采样的问题。旧 Late Fusion 权重没有新标记时，加载器会明确提示并保留旧计算方式；新训练默认使用修正方式。这些变化可能影响重新训练的结果，详见 [论文对应说明](docs/PAPER_ALIGNMENT.md)。
+输出 JSON 包含 `T_EC`、逆变换 `T_CE`、平移单位和四元数顺序（`xyzw`）。命令中的相对路径均以当前工作目录为基准。
 
-当前未包含训练权重、数据集、仿真场景/CAD、论文 PDF、RGB Direct Regression 与 ResNet+MLP 两个独立对比基线。不能把现有 RGB-only 消融当作 Direct Regression。论文中的真实实验指标是固定物体重建的一致性，不是绝对标定误差。
+## 模型评估
 
-源码可用于继续训练和部署准备，尚不能仅凭本目录复现论文所有结果。发布前还需作者确定许可证，并在准备好后补充论文公开链接及数据/权重获取方式。
+使用带位姿标签的独立仿真测试集进行评估：
+
+```bash
+python evaluate.py --data-dir data/test --checkpoint runs/rehc_former/best_infer_only.pt --output-dir outputs/test
+```
+
+评估指标包括平移误差（mm）、旋转测地误差（°），以及 5 mm/2° 和 10 mm/5° 阈值下的联合成功率。如需计算平均点距离 `e_ad`，添加 `--points data/evaluation_points_C_mm.npy`，提供相机坐标系下、单位为 mm 的固定 N×3 点集。比较不同模型时应使用同一点集。
+
+## 项目结构
+
+| 路径 | 功能 |
+|---|---|
+| `rehc_former/` | 位姿模型、数据加载、损失函数和训练工具 |
+| `train.py` | 位姿模型训练 |
+| `predict.py` | 单图像推理 |
+| `evaluate.py` | 仿真测试集评估 |
+| `segmentation/` | SegFormer 训练、推理与 ONNX 导出 |
+| `data_collection/` | CoppeliaSim 数据采集 |
+| `tests/` | CPU 流程测试 |
+
+## 测试
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+测试使用合成数据检查模型和流程行为。实验配置与验证细节见[实现说明](docs/PAPER_ALIGNMENT.md)和[验证说明](docs/VALIDATION.md)。
+
+## 引用
+
+如果本项目对你的研究有帮助，请引用：
+
+> Xu Wu, Zhongtao Fu, Longhua Li, Bo Yang, Xuan Zhou, Zhenghua Huang, and Xubing Chen. **REHC-Former: Transformer-Based Robotic Eye-in-Hand Calibration from a Single Image.**
